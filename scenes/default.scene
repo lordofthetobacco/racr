@@ -1,4 +1,4 @@
 # racr scene file — F5 save / F6 load (paths must not contain spaces)
 racr_scene 1
 camera 0 1.47712 4.77091 0 0.3 0.785398 1.333333 0.1 100
-object assets/model.obj 0 0 0 0 1
+object assets/skyline.obj 0 0 0 0 1

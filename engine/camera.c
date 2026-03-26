@@ -70,9 +70,7 @@ mat4 camera_projection(const Camera *c) {
     return mat4_perspective(c->fov, c->aspect, c->near_plane, c->far_plane);
 }
 
-void camera_apply_mouse_look(Camera *c, float dx, float dy, float sensitivity) {
-    c->yaw -= dx * sensitivity;
-    c->pitch -= dy * sensitivity;
+void camera_clamp_angles(Camera *c) {
     /* Stay below ~±85° so look-at never sees forward ∥ world Y (no roll twist). */
     const float lim = 1.48f;
     if (c->pitch > lim) c->pitch = lim;
@@ -82,6 +80,12 @@ void camera_apply_mouse_look(Camera *c, float dx, float dy, float sensitivity) {
     const float pi    = 3.14159265f;
     while (c->yaw > pi) c->yaw -= twopi;
     while (c->yaw < -pi) c->yaw += twopi;
+}
+
+void camera_apply_mouse_look(Camera *c, float dx, float dy, float sensitivity) {
+    c->yaw -= dx * sensitivity;
+    c->pitch -= dy * sensitivity;
+    camera_clamp_angles(c);
 }
 
 void camera_move_fps(Camera *c, float forward, float right, float up, float step) {

@@ -77,6 +77,21 @@ void shader_set_vec3(GLuint program, const char *name, vec3 v) {
     if (loc >= 0) glUniform3f(loc, v.x, v.y, v.z);
 }
 
+void shader_set_vec4(GLuint program, const char *name, vec4 v) {
+    GLint loc = glGetUniformLocation(program, name);
+    if (loc >= 0) glUniform4f(loc, v.x, v.y, v.z, v.w);
+}
+
+void shader_set_float(GLuint program, const char *name, float v) {
+    GLint loc = glGetUniformLocation(program, name);
+    if (loc >= 0) glUniform1f(loc, v);
+}
+
+void shader_set_int(GLuint program, const char *name, int v) {
+    GLint loc = glGetUniformLocation(program, name);
+    if (loc >= 0) glUniform1i(loc, v);
+}
+
 void shader_destroy(GLuint program) {
     if (program) glDeleteProgram(program);
 }

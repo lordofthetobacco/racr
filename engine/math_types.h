@@ -5,10 +5,15 @@
 #include <string.h>
 
 typedef struct { float x, y, z; } vec3;
+typedef struct { float x, y, z, w; } vec4;
 typedef struct { float m[16]; } mat4; /* column-major */
 
 static inline vec3 vec3_new(float x, float y, float z) {
     return (vec3){x, y, z};
+}
+
+static inline vec4 vec4_new(float x, float y, float z, float w) {
+    return (vec4){x, y, z, w};
 }
 
 static inline vec3 vec3_add(vec3 a, vec3 b) {
@@ -98,6 +103,16 @@ static inline mat4 mat4_rotate_x(float rad) {
     r.m[6]  =  s;
     r.m[9]  = -s;
     r.m[10] =  c;
+    return r;
+}
+
+static inline mat4 mat4_rotate_z(float rad) {
+    mat4 r = mat4_identity();
+    float c = cosf(rad), s = sinf(rad);
+    r.m[0] = c;
+    r.m[1] = s;
+    r.m[4] = -s;
+    r.m[5] = c;
     return r;
 }
 

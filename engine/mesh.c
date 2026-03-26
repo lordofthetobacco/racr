@@ -1,5 +1,6 @@
 #include "mesh.h"
 #include <stddef.h>
+#include <stdint.h>
 
 Mesh mesh_create(const Vertex *verts, int nv,
                  const uint32_t *indices, int ni) {
@@ -33,6 +34,11 @@ Mesh mesh_create(const Vertex *verts, int nv,
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                           (void *)offsetof(Vertex, uv));
 
+    /* tangent: location 3 */
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                          (void *)offsetof(Vertex, tangent));
+
     glBindVertexArray(0);
     return m;
 }
@@ -40,6 +46,17 @@ Mesh mesh_create(const Vertex *verts, int nv,
 void mesh_draw(const Mesh *m) {
     glBindVertexArray(m->vao);
     glDrawElements(GL_TRIANGLES, m->index_count, GL_UNSIGNED_INT, 0);
+    glBindVertexArray(0);
+}
+
+void mesh_draw_range(const Mesh *m, int first_index, int index_count) {
+    mesh_draw_mode(m, GL_TRIANGLES, first_index, index_count);
+}
+
+void mesh_draw_mode(const Mesh *m, GLenum mode, int first_index, int index_count) {
+    glBindVertexArray(m->vao);
+    glDrawElements(mode, index_count, GL_UNSIGNED_INT,
+                   (const void *)(intptr_t)(first_index * (int)sizeof(uint32_t)));
     glBindVertexArray(0);
 }
 

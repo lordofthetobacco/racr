@@ -19,6 +19,7 @@ vec3   camera_right_flat(const Camera *c);
 vec3   camera_position(const Camera *c);
 mat4   camera_view(const Camera *c);
 mat4   camera_projection(const Camera *c);
+void   camera_clamp_angles(Camera *c);
 void   camera_apply_mouse_look(Camera *c, float dx, float dy, float sensitivity);
 void   camera_move_fps(Camera *c, float forward, float right, float up, float step);
 void   camera_pan(Camera *c, float right, float up);
