@@ -7,6 +7,7 @@
 #include "mesh.h"
 #include "math_types.h"
 #include "obj_loader.h"
+#include "physics.h"
 #include "render_settings.h"
 #include <stdbool.h>
 
@@ -25,7 +26,7 @@ typedef struct {
     Material material;
 } SubMesh;
 
-typedef struct {
+typedef struct SceneObject {
     Mesh mesh;
     LODLevel lods[LOD_LEVEL_MAX];
     int lod_count;
@@ -33,6 +34,7 @@ typedef struct {
     Transform transform;
     SubMesh *submeshes;
     int sub_count;
+    PhysicsBody physics;
 } SceneObject;
 
 typedef struct {

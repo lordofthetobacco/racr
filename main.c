@@ -107,6 +107,49 @@ static void load_obj_into_scene(Scene *scene, const char *path) {
     free(groups);
 }
 
+static bool ensure_saved_positions_capacity(vec3 **positions, int *capacity, int count) {
+    if (!positions || !capacity || count < 0) return false;
+    if (*capacity >= count) return true;
+    int new_capacity = (*capacity > 0) ? *capacity : 4;
+    while (new_capacity < count) new_capacity *= 2;
+    vec3 *new_positions = realloc(*positions, (size_t)new_capacity * sizeof(vec3));
+    if (!new_positions) return false;
+    *positions = new_positions;
+    *capacity = new_capacity;
+    return true;
+}
+
+static bool capture_saved_positions(const Scene *scene, vec3 **positions, int *capacity,
+                                    int *saved_count) {
+    if (!scene || !positions || !capacity || !saved_count) return false;
+    if (!ensure_saved_positions_capacity(positions, capacity, scene->count)) return false;
+    for (int i = 0; i < scene->count; i++) {
+        (*positions)[i] = scene->objects[i].transform.position;
+    }
+    *saved_count = scene->count;
+    return true;
+}
+
+static void restore_saved_positions(Scene *scene, const vec3 *positions, int saved_count) {
+    if (!scene || !positions || saved_count != scene->count) return;
+    for (int i = 0; i < scene->count; i++) {
+        scene->objects[i].transform.position = positions[i];
+        scene->objects[i].physics.velocity = vec3_new(0.0f, 0.0f, 0.0f);
+        scene->objects[i].physics.grounded = false;
+    }
+}
+
+static void normalize_scene_physics(Scene *scene) {
+    if (!scene) return;
+    for (int i = 0; i < scene->count; i++) {
+        PhysicsBody *body = &scene->objects[i].physics;
+        if (body->mass < 0.01f) body->mass = 0.01f;
+        if (body->restitution < 0.0f) body->restitution = 0.0f;
+        if (body->restitution > 1.0f) body->restitution = 1.0f;
+        if (body->friction < 0.0f) body->friction = 0.0f;
+    }
+}
+
 static bool decode_pick_id(uint32_t id, int *out_obj_idx, int *out_sub_idx) {
     if (id == 0) return false;
     id -= 1;
@@ -235,12 +278,32 @@ int main(void) {
     scene_init(&scene);
     render_settings_detect_gl_caps(&scene.render_settings);
     GLuint flat_normal_tex = texture_create_flat_normal(&scene.render_settings);
-    DebugLines point_light_gizmo;
-    (void)debug_lines_init_point_light(&point_light_gizmo);
+    DebugLines point_light_gizmo = {0};
+    DebugLines grid_lines = {0};
+    DebugLines axis_lines = {0};
+    if (!debug_lines_init_point_light(&point_light_gizmo) ||
+        !debug_lines_init_grid(&grid_lines, 20, 1.0f) ||
+        !debug_lines_init_axis(&axis_lines)) {
+        SDL_Log("Failed to initialize debug line geometry");
+        debug_lines_destroy(&point_light_gizmo);
+        debug_lines_destroy(&grid_lines);
+        debug_lines_destroy(&axis_lines);
+        texture_destroy(flat_normal_tex);
+        scene_destroy(&scene);
+        nk_impl_shutdown();
+        pick_destroy(&pick_ctx);
+        shader_destroy(shader_main);
+        shader_destroy(shader_pick);
+        SDL_GL_DestroyContext(gl_ctx);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
 
     Camera cam = camera_default(800.0f / 600.0f);
     if (!scene_load(&scene, &cam, SCENE_SAVE_PATH))
         load_obj_into_scene(&scene, OBJ_PATH);
+    normalize_scene_physics(&scene);
     camera_clamp_angles(&cam);
     float move_speed = 0.15f;
 
@@ -253,6 +316,11 @@ int main(void) {
     bool ui_capture_mouse = false;
     int selected_point_light = -1;
     ContextMenuState menu = {0};
+    bool physics_active = false;
+    float physics_gravity = 9.81f;
+    vec3 *saved_positions = NULL;
+    int saved_positions_capacity = 0;
+    int saved_positions_count = 0;
     Uint64 perf_freq = SDL_GetPerformanceFrequency();
     Uint64 perf_prev = SDL_GetPerformanceCounter();
     float fps_ema = 0.0f;
@@ -277,12 +345,18 @@ int main(void) {
                     break;
                 case SDL_SCANCODE_L:
                     load_obj_into_scene(&scene, OBJ_PATH);
+                    normalize_scene_physics(&scene);
+                    physics_active = false;
+                    saved_positions_count = 0;
                     break;
                 case SDL_SCANCODE_F5:
                     (void)scene_save(&scene, &cam, SCENE_SAVE_PATH);
                     break;
                 case SDL_SCANCODE_F6:
                     (void)scene_load(&scene, &cam, SCENE_SAVE_PATH);
+                    normalize_scene_physics(&scene);
+                    physics_active = false;
+                    saved_positions_count = 0;
                     break;
                 case SDL_SCANCODE_LEFT:
                     cam.yaw -= 0.05f;
@@ -398,6 +472,13 @@ int main(void) {
         }
         nk_impl_input_end();
 
+        Uint64 perf_now = SDL_GetPerformanceCounter();
+        float delta_s = (float)(perf_now - perf_prev) / (float)perf_freq;
+        perf_prev = perf_now;
+        float fps_now = (delta_s > 1e-6f) ? (1.0f / delta_s) : 0.0f;
+        if (fps_ema <= 0.0f) fps_ema = fps_now;
+        fps_ema = fps_ema * 0.95f + fps_now * 0.05f;
+
         int nk = 0;
         const bool *keys = SDL_GetKeyboardState(&nk);
         float mf = 0.0f, mr = 0.0f, mu = 0.0f;
@@ -410,25 +491,19 @@ int main(void) {
             mu -= 1.0f;
         if (!ui_capture_mouse && (mf != 0.0f || mr != 0.0f || mu != 0.0f))
             camera_move_fps(&cam, mf, mr, mu, move_speed);
-
-        Uint64 perf_now = SDL_GetPerformanceCounter();
-        float delta_s = (float)(perf_now - perf_prev) / (float)perf_freq;
-        perf_prev = perf_now;
-        float fps_now = (delta_s > 1e-6f) ? (1.0f / delta_s) : 0.0f;
-        if (fps_ema <= 0.0f) fps_ema = fps_now;
-        fps_ema = fps_ema * 0.95f + fps_now * 0.05f;
+        if (physics_active)
+            physics_step(scene.objects, scene.count, delta_s, physics_gravity);
 
         glClearColor(0.12f, 0.14f, 0.18f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         /* nk_sdl_render disables depth testing; restore for 3D scene pass. */
         glEnable(GL_DEPTH_TEST);
+        mat4 view = camera_view(&cam);
+        mat4 proj = camera_projection(&cam);
+        vec3 cam_pos = camera_position(&cam);
 
         if (scene.count > 0) {
             shader_use(shader_main);
-
-            mat4 view = camera_view(&cam);
-            mat4 proj = camera_projection(&cam);
-            vec3 cam_pos = camera_position(&cam);
 
             shader_set_mat4(shader_main, "u_view", &view);
             shader_set_mat4(shader_main, "u_proj", &proj);
@@ -487,34 +562,93 @@ int main(void) {
             }
         }
 
+        debug_lines_draw_world(&grid_lines, shader_pick, &view, &proj,
+                               vec3_new(0.33f, 0.34f, 0.37f));
+        frame_vertices += grid_lines.vertex_count;
+        frame_draw_calls++;
+
         if (menu.open && menu.obj_idx >= 0 && menu.obj_idx < scene.count) {
             SceneObject *obj = &scene.objects[menu.obj_idx];
             if (menu.sub_idx < 0 || menu.sub_idx >= obj->sub_count) menu.sub_idx = 0;
 
-            int flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_CLOSABLE;
+            int flags = NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE;
             if (nk_begin(ui, "Object Context", nk_rect(menu.x, menu.y, 360, 420), flags)) {
+                nk_layout_row_dynamic(ui, 24, 1);
+                if (nk_button_label(ui, "Close")) {
+                    menu.open = false;
+                }
                 nk_layout_row_dynamic(ui, 20, 1);
                 nk_label(ui, obj->mesh_path, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 nk_label(ui, "Transform", NK_TEXT_LEFT);
+                char prop_label[96];
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Position X: %.2f", obj->transform.position.x);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.position.x = nk_slide_float(ui, -100.0f, obj->transform.position.x, 100.0f, 0.05f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Position Y: %.2f", obj->transform.position.y);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.position.y = nk_slide_float(ui, -100.0f, obj->transform.position.y, 100.0f, 0.05f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Position Z: %.2f", obj->transform.position.z);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.position.z = nk_slide_float(ui, -100.0f, obj->transform.position.z, 100.0f, 0.05f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Rotation X: %.2f", obj->transform.rotation.x);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.rotation.x = nk_slide_float(ui, -3.14159f, obj->transform.rotation.x, 3.14159f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Rotation Y: %.2f", obj->transform.rotation.y);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.rotation.y = nk_slide_float(ui, -3.14159f, obj->transform.rotation.y, 3.14159f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Rotation Z: %.2f", obj->transform.rotation.z);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.rotation.z = nk_slide_float(ui, -3.14159f, obj->transform.rotation.z, 3.14159f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Scale X: %.2f", obj->transform.scale.x);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.scale.x = nk_slide_float(ui, 0.01f, obj->transform.scale.x, 20.0f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Scale Y: %.2f", obj->transform.scale.y);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.scale.y = nk_slide_float(ui, 0.01f, obj->transform.scale.y, 20.0f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Scale Z: %.2f", obj->transform.scale.z);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
                 nk_layout_row_dynamic(ui, 20, 1);
                 obj->transform.scale.z = nk_slide_float(ui, 0.01f, obj->transform.scale.z, 20.0f, 0.01f);
+                nk_layout_row_dynamic(ui, 20, 1);
+                nk_label(ui, "Physics", NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ui, 20, 1);
+                nk_bool physics_enabled = obj->physics.enabled ? 1 : 0;
+                if (nk_checkbox_label(ui, "Enabled", &physics_enabled)) {
+                    obj->physics.enabled = (physics_enabled != 0);
+                }
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Mass (kg): %.2f", obj->physics.mass);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
+                obj->physics.mass = nk_propertyf(ui, "#kg:", 0.01f, obj->physics.mass, 1000.0f, 0.05f, 0.02f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Bounciness (restitution): %.2f", obj->physics.restitution);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ui, 20, 1);
+                obj->physics.restitution = nk_slide_float(ui, 0.0f, obj->physics.restitution, 1.0f, 0.01f);
+                nk_layout_row_dynamic(ui, 18, 1);
+                snprintf(prop_label, sizeof(prop_label), "Surface friction: %.2f", obj->physics.friction);
+                nk_label(ui, prop_label, NK_TEXT_LEFT);
+                nk_layout_row_dynamic(ui, 20, 1);
+                obj->physics.friction = nk_slide_float(ui, 0.0f, obj->physics.friction, 3.0f, 0.01f);
+                if (obj->physics.mass < 0.01f) obj->physics.mass = 0.01f;
                 nk_layout_row_dynamic(ui, 20, 1);
                 nk_label(ui, "Components", NK_TEXT_LEFT);
 
@@ -566,7 +700,7 @@ int main(void) {
                         edited.roughness = nk_slide_float(ui, 0.04f, edited.roughness, 1.0f, 0.002f);
 
                         nk_layout_row_dynamic(ui, 18, 1);
-                        snprintf(color_label, sizeof(color_label), "Normal map: %s",
+                        snprintf(color_label, sizeof(color_label), "Normal map: %.115s",
                                  edited.normal_map_path[0] ? edited.normal_map_path : "(none)");
                         nk_label(ui, color_label, NK_TEXT_LEFT);
                         nk_layout_row_dynamic(ui, 28, 2);
@@ -586,7 +720,6 @@ int main(void) {
                 }
                 free(sorted_indices);
             }
-            if (nk_window_is_closed(ui, "Object Context")) menu.open = false;
             nk_end(ui);
         }
 
@@ -679,6 +812,36 @@ int main(void) {
             }
 
             nk_layout_row_dynamic(ui, 20, 1);
+            nk_label(ui, "Physics", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ui, 28, 2);
+            if (nk_button_label(ui, physics_active ? "Pause" : "Play")) {
+                physics_active = !physics_active;
+                if (physics_active) {
+                    if (!capture_saved_positions(&scene, &saved_positions, &saved_positions_capacity,
+                                                 &saved_positions_count)) {
+                        SDL_Log("Failed to capture physics reset positions");
+                        physics_active = false;
+                    } else {
+                        for (int i = 0; i < scene.count; i++) {
+                            scene.objects[i].physics.velocity = vec3_new(0.0f, 0.0f, 0.0f);
+                            scene.objects[i].physics.grounded = false;
+                        }
+                    }
+                }
+            }
+            if (nk_button_label(ui, "Reset")) {
+                if (saved_positions_count == scene.count) {
+                    restore_saved_positions(&scene, saved_positions, saved_positions_count);
+                }
+            }
+            char gravity_label[64];
+            nk_layout_row_dynamic(ui, 18, 1);
+            snprintf(gravity_label, sizeof(gravity_label), "Gravity (m/s^2): %.2f", physics_gravity);
+            nk_label(ui, gravity_label, NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ui, 20, 1);
+            physics_gravity = nk_slide_float(ui, 0.0f, physics_gravity, 40.0f, 0.1f);
+
+            nk_layout_row_dynamic(ui, 20, 1);
             nk_label(ui, "Anisotropic Filtering", NK_TEXT_LEFT);
             if (scene.render_settings.anisotropy_supported) {
                 nk_layout_row_dynamic(ui, 20, 1);
@@ -709,6 +872,9 @@ int main(void) {
         nk_end(ui);
 
         ui_capture_mouse = nk_window_is_any_hovered(ui) || nk_item_is_any_active(ui);
+        debug_lines_draw_axis_indicator(&axis_lines, shader_pick, &view, window_w, window_h);
+        frame_vertices += axis_lines.vertex_count;
+        frame_draw_calls += 3;
         nk_impl_render();
 
         SDL_GL_SwapWindow(window);
@@ -716,7 +882,10 @@ int main(void) {
 
     scene_destroy(&scene);
     debug_lines_destroy(&point_light_gizmo);
+    debug_lines_destroy(&grid_lines);
+    debug_lines_destroy(&axis_lines);
     texture_destroy(flat_normal_tex);
+    free(saved_positions);
     nk_impl_shutdown();
     pick_destroy(&pick_ctx);
     shader_destroy(shader_main);

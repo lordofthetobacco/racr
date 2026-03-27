@@ -24,6 +24,7 @@ add_executable(${PROJECT_NAME}
   engine/render_settings.c
   engine/texture.c
   engine/camera.c
+  engine/physics.c
   engine/debug_draw.c
   engine/pick.c
   engine/nk_impl.c

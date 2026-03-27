@@ -2,6 +2,7 @@
 #include "obj_loader.h"
 #include "mesh.h"
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,6 +62,11 @@ bool scene_save(const Scene *scene, const Camera *cam, const char *path) {
                     (double)sm->material.roughness,
                     sm->material.normal_map_path[0] ? sm->material.normal_map_path : "-");
         }
+        fprintf(f, "physics %g %g %g %d\n",
+                (double)o->physics.mass,
+                (double)o->physics.restitution,
+                (double)o->physics.friction,
+                o->physics.enabled ? 1 : 0);
     }
 
     fclose(f);
@@ -225,6 +231,22 @@ bool scene_load(Scene *scene, Camera *cam, const char *path) {
                 }
                 (void)scene_set_submesh_material(current_obj, name, mat);
             }
+            continue;
+        }
+
+        if (strncmp(line, "physics ", 8) == 0 && current_obj) {
+            float mass = current_obj->physics.mass;
+            float restitution = current_obj->physics.restitution;
+            float friction = current_obj->physics.friction;
+            int enabled_int = current_obj->physics.enabled ? 1 : 0;
+            int n = sscanf(line + 8, "%f %f %f %d", &mass, &restitution, &friction, &enabled_int);
+            if (n >= 1) current_obj->physics.mass = (mass > 0.01f) ? mass : 0.01f;
+            if (n >= 2) current_obj->physics.restitution = restitution;
+            if (n >= 3) current_obj->physics.friction = friction;
+            if (n >= 4) current_obj->physics.enabled = (enabled_int != 0);
+            current_obj->physics.restitution = fmaxf(0.0f, fminf(1.0f, current_obj->physics.restitution));
+            current_obj->physics.friction = fmaxf(0.0f, current_obj->physics.friction);
+            continue;
         }
     }
 

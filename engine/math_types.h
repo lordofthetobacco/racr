@@ -129,6 +129,18 @@ static inline mat4 mat4_perspective(float fov_rad, float aspect,
     return r;
 }
 
+static inline mat4 mat4_ortho(float left, float right, float bottom, float top,
+                              float near, float far) {
+    mat4 r = mat4_identity();
+    r.m[0] = 2.0f / (right - left);
+    r.m[5] = 2.0f / (top - bottom);
+    r.m[10] = -2.0f / (far - near);
+    r.m[12] = -(right + left) / (right - left);
+    r.m[13] = -(top + bottom) / (top - bottom);
+    r.m[14] = -(far + near) / (far - near);
+    return r;
+}
+
 static inline mat4 mat4_look_at(vec3 eye, vec3 center, vec3 up) {
     vec3 f = vec3_normalize(vec3_sub(center, eye));
     vec3 s = vec3_normalize(vec3_cross(f, up));

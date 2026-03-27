@@ -54,6 +54,9 @@ void scene_add(Scene *s, Mesh mesh, const char *mesh_path,
         o->submeshes[0].material = material_default();
     }
 
+    physics_body_init(&o->physics);
+    o->physics.local_aabb = physics_compute_local_aabb(verts, nv);
+
     if (verts && indices && nv > 0 && ni > 0) {
         o->lod_count = lod_generate_levels(verts, nv, indices, ni, o->lods, LOD_LEVEL_MAX);
         if (o->lod_count > 0) {
